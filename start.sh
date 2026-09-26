@@ -27,6 +27,10 @@ if ! command -v llama >/dev/null 2>&1; then
   echo "Cannot find 'llama'. Install llama.cpp and check that 'llama serve --help' works." >&2
   exit 1
 fi
+if ! command -v setsid >/dev/null 2>&1; then
+  echo "Cannot find 'setsid' (util-linux); it is needed to stop the model server cleanly." >&2
+  exit 1
+fi
 
 if command -v uv >/dev/null 2>&1; then
   echo "Preparing webcam dependency with uv..."
@@ -53,33 +57,58 @@ if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
   echo "VISION_PORT must be a port from 1024 to 65535." >&2
   exit 1
 fi
-if ! python3 - "$port" <<'PY'
+port_free() {
+  python3 - "$1" <<'PY'
 import socket, sys
 with socket.socket() as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(("127.0.0.1", int(sys.argv[1])))
     except OSError:
         raise SystemExit(1)
 PY
-then
-  echo "Port $port is already in use. Set VISION_PORT to another free port." >&2
-  exit 1
+}
+if ! port_free "$port"; then
+  if [[ -n "${VISION_PORT:-}" ]]; then
+    echo "Port $port is already in use. Choose a free VISION_PORT or stop the process using it." >&2
+    exit 1
+  fi
+  for candidate in {8061..8079}; do
+    if port_free "$candidate"; then
+      echo "Port 8060 is in use; using port $candidate. An older server may still be running on 8060."
+      port="$candidate"
+      break
+    fi
+  done
+  if [[ "$port" == 8060 ]]; then
+    echo "No free port found from 8060 to 8079. Stop the old server or set VISION_PORT." >&2
+    exit 1
+  fi
 fi
 
 mkdir -p .run
 echo "Starting Gemma 3 4B vision on CPU; first run may download model weights."
 echo "Server log: $(pwd)/.run/llama.log"
-llama serve --vision-gemma-4b-default --alias local-vision \
+setsid llama serve --vision-gemma-4b-default --alias local-vision \
   -c 2048 -ngl 0 --host 127.0.0.1 --port "$port" > .run/llama.log 2>&1 &
 server_pid=$!
 
 cleanup() {
-  if kill -0 "$server_pid" 2>/dev/null; then
-    kill "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
-  fi
+  trap - EXIT INT TERM
+  # The separate session includes wrapper scripts and any children they launch.
+  kill -TERM -- "-$server_pid" 2>/dev/null || true
+  for ((attempt=0; attempt<20; attempt++)); do
+    if ! kill -0 -- "-$server_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  kill -KILL -- "-$server_pid" 2>/dev/null || true
+  wait "$server_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 ready=0
 for ((attempt=1; attempt<=900; attempt++)); do

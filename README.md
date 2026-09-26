@@ -2,9 +2,9 @@
 
 Point your Linux laptop webcam at a scene and watch object estimates appear in the terminal. The application uses **Gemma 3 4B QAT vision** through your `llama` installation. The `4B` is the model size; the preset you showed is named `--vision-gemma-4b-default` and refers to Gemma **3**, not a model named “Gemma 4.”
 
-## Run from the zip
+## Run from GitHub
 
-1. Extract the zip and open a terminal **inside** `real-time-visual-classificator/`.
+1. Clone the repository with `git clone https://github.com/mircea-popa02/real-time-visual-classificator.git` and enter it with `cd real-time-visual-classificator` (or run `git pull` if you already have it).
 2. Check that `llama serve --help` and `python3 --version` work. The launcher uses `uv` if installed; otherwise Python's `venv` and `pip`.
 3. Run:
 
@@ -12,7 +12,7 @@ Point your Linux laptop webcam at a scene and watch object estimates appear in t
 ./start.sh
 ```
 
-The first run creates `.venv`, installs OpenCV, and may download Gemma model weights through `llama`. It then starts the model server, reads your webcam, and prints progress in the **same terminal**. Keep internet access available for the first setup. Press **Ctrl-C** to stop; the launcher stops its server too. A camera window is off by default, avoiding OpenCV's Qt/Wayland warnings. Add `--preview` if you want one. The model runs on CPU by default so it can start on a 16 GB AMD laptop. Expect tens of seconds per analyzed frame rather than video-rate inference.
+The first run creates `.venv`, installs OpenCV, and may download Gemma model weights through `llama`. It then starts the model server, reads your webcam, and prints progress in the **same terminal**. Keep internet access available for the first setup. Press **Ctrl-C** to stop; the launcher stops the server and any child processes it started. A camera window is off by default, avoiding OpenCV's Qt/Wayland warnings. Add `--preview` if you want one. The model runs on CPU by default so it can start on a 16 GB AMD laptop. Expect tens of seconds per analyzed frame rather than video-rate inference.
 
 Example output:
 
@@ -44,7 +44,7 @@ One Gemma request produces structured JSON: a short scene summary, indoor/outdoo
 | `./start.sh --test` | Run offline tests without starting the server. |
 | `./start.sh --help` | Show the launcher commands. |
 
-If your camera is not device 0, add `--camera 1`. A custom server port can be selected with `VISION_PORT=8061 ./start.sh`. Startup messages are in the terminal; detailed server messages go to `.run/llama.log`. If setup fails, read the terminal error and that log. On Wayland, `QT_QPA_PLATFORM=xcb ./start.sh --preview` may work if Xwayland is installed; the default terminal-only mode does not use Qt.
+If your camera is not device 0, add `--camera 1`. The launcher uses port 8060 and automatically tries 8061–8079 if it is busy. You can also set `VISION_PORT=8061 ./start.sh`; an explicitly selected busy port produces an error. If an older version left a server on 8060, check the listener with `ss -ltnp '( sport = :8060 )'` and stop **that PID** with `kill PID` if it belongs to your previous run. On a 16 GB laptop, stop an old model server before starting a second copy. Startup messages are in the terminal; detailed server messages go to `.run/llama.log`. If setup fails, read the terminal error and that log. On Wayland, `QT_QPA_PLATFORM=xcb ./start.sh --preview` may work if Xwayland is installed; the default terminal-only mode does not use Qt.
 
 ## How it works
 
@@ -54,7 +54,7 @@ Only the local vision model is used. Gemma emits structured scene JSON, then ans
 
 | Path | Purpose |
 | --- | --- |
-| `start.sh` | Single Linux entry point: install OpenCV, launch/wait for `llama serve`, run the app, clean up. |
+| `start.sh` | Single Linux entry point: install OpenCV, launch/wait for `llama serve`, run the app, stop its server process group. |
 | `run.py` | Python entry point that imports directly from `src/`; no package installation needed. |
 | `src/visual_classifier/catalog.py` | The 36 object names and optional scene questions. |
 | `src/visual_classifier/decision.py` | Structured Gemma observation, parallel logprob questions, and probability math. |
@@ -64,6 +64,6 @@ Only the local vision model is used. Gemma emits structured scene JSON, then ans
 | `examples/scene.json` | Example of custom binary, choice, and score questions. |
 | `pyproject.toml` | Optional package metadata and webcam dependency. |
 
-The script uses the webcam in one worker at a time and skips older frames while Gemma is busy. It cannot promise real-time video speed on every 16 GB laptop. No model weights or personal credentials are inside the zip.
+The script uses the webcam in one worker at a time and skips older frames while Gemma is busy. It cannot promise real-time video speed on every 16 GB laptop. No model weights or personal credentials are in the repository.
 
 Inspired by the local vision token-probability experiment in Allan Riordan Boll's September 25, 2026 article supplied with this project. This implementation is not affiliated with the author.
