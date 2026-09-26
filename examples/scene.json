@@ -1,0 +1,23 @@
+{
+  "state": "Inspect the image. Judge only what is visibly present.",
+  "questions": {
+    "person": {"type": "noul", "instructions": "Is a person visible?"},
+    "animal": {"type": "noul", "instructions": "Is an animal visible?"},
+    "object": {"type": "noul", "instructions": "Is an object visible?"},
+    "vehicle": {"type": "noul", "instructions": "Is a vehicle visible?"},
+    "scene": {"type": "noul", "instructions": "Is a scene visible?"},
+    "action": {"type": "noul", "instructions": "Is an action visible?"},
+    "weather": {"type": "noul", "instructions": "Is the weather visible?"},
+    "time_of_day": {"type": "noul", "instructions": "Is the time of day visible?"},
+    "location": {"type": "noul", "instructions": "Is the location visible?"},
+    "emotion": {"type": "noul", "instructions": "Is an emotion visible?"},
+    "setting": {
+      "type": "choice", "instructions": "Where is the scene?",
+      "criteria": {"indoors": null, "outdoors": null, "unclear": null}
+    },
+    "light": {
+      "type": "score", "instructions": "How bright is the scene?",
+      "criteria": ["dark", "dim", "bright"]
+    }
+  }
+}
