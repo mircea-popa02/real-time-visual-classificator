@@ -3,20 +3,20 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "jev-vision-probe"
+name = "real-time-visual-classificator"
 version = "0.1.0"
-description = "Configurable Jev-style decisions for local vision models and the Jev API"
+description = "Local webcam object classification using vision model token probabilities"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name = "Jev Vision Probe contributors"}]
+authors = [{name = "Real-time Visual Classificator contributors"}]
 dependencies = []
 
 [project.optional-dependencies]
 webcam = ["opencv-python==5.0.0.93"]
 
 [project.scripts]
-jev-vision = "jev_vision.cli:main"
+visual-classifier = "visual_classifier.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jev_vision"]
+packages = ["src/visual_classifier"]

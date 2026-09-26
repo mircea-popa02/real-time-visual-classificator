@@ -9,8 +9,6 @@ if [[ "${1:-}" == "--help" ]]; then
 ./start.sh                 Start Gemma 3 4B and classify webcam frames
 ./start.sh --image FILE    Classify one image instead
 ./start.sh --test          Run the built-in offline tests
-./start.sh --backend jev --state 'TEXT' --objects person,chair
-                           Ask the JEV API about text (needs JEV_API_KEY)
 Other application options: python3 run.py --help
 HELP
   exit 0
@@ -23,10 +21,6 @@ fi
 
 if [[ "${1:-}" == "--test" ]]; then
   exec python3 tests/test_decision.py
-fi
-
-if [[ " $* " == *" --backend jev "* ]]; then
-  exec python3 run.py "$@"
 fi
 
 if ! command -v llama >/dev/null 2>&1; then
@@ -54,9 +48,9 @@ python_bin="$(pwd)/.venv/bin/python"
   exit 1
 }
 
-port="${JEV_VISION_PORT:-8060}"
+port="${VISION_PORT:-8060}"
 if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
-  echo "JEV_VISION_PORT must be a port from 1024 to 65535." >&2
+  echo "VISION_PORT must be a port from 1024 to 65535." >&2
   exit 1
 fi
 if ! python3 - "$port" <<'PY'
@@ -68,7 +62,7 @@ with socket.socket() as sock:
         raise SystemExit(1)
 PY
 then
-  echo "Port $port is already in use. Set JEV_VISION_PORT to another free port." >&2
+  echo "Port $port is already in use. Set VISION_PORT to another free port." >&2
   exit 1
 fi
 

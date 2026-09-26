@@ -1,4 +1,4 @@
-"""Single-command interface for still images, webcam, and text state."""
+"""Classify webcam frames or images with a local vision model."""
 
 import argparse
 import base64
@@ -8,12 +8,13 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import queue
 import sys
 import threading
 import time
 
 from .catalog import OBJECTS, SCENE_QUESTIONS, object_questions
-from .decision import DecisionError, jev_decide, local_decide, local_discover
+from .decision import DecisionError, local_decide, local_observe
 
 
 def image_uri(path):
@@ -29,8 +30,8 @@ def image_uri(path):
 
 def render(result, threshold):
     answers = result["answers"]
-    present = sorted(((name, answer["noul"]) for name, answer in answers.items()
-                      if answer.get("type") == "noul" and answer.get("noul", 0) >= threshold),
+    present = sorted(((name, answer["probability"]) for name, answer in answers.items()
+                      if answer.get("type") == "binary" and answer.get("probability", 0) >= threshold),
                      key=lambda pair: pair[1], reverse=True)
     scene = {name: answer.get("choice", answer.get("score")) for name, answer in answers.items()
              if answer.get("type") in {"choice", "score"}}
@@ -51,39 +52,38 @@ def _questions(args):
     return questions, "Inspect the image. Judge only what is visibly present. If uncertain, favor absent."
 
 
-def _decide(args, state, questions, images):
+def _decide(args, state, questions, images, progress=None):
     started = time.perf_counter()
-    if args.backend == "jev":
-        if images:
-            raise DecisionError("Jev's documented API does not accept image attachments; use --backend local")
-        result = jev_decide(state, questions, args.model, args.jev_url, args.timeout)
-        result["backend"] = "JEV API"
-        result["elapsed_s"] = time.perf_counter() - started
-        return result
     model = args.model or "local-vision"
     names = None
+    observation = None
     if images and not args.config and args.objects == "all":
-        names = local_discover(images, OBJECTS, args.url, model,
-                               os.environ.get("LOCAL_API_KEY"), args.timeout)
+        observation = local_observe(images, OBJECTS, args.url, model,
+                                    os.environ.get("LOCAL_API_KEY"), args.timeout,
+                                    limit=args.max_candidates)
+        names = observation["objects"]
+        if progress:
+            progress("observation", observation)
         questions = object_questions(names) if names else {}
         if args.scene:
             questions.update(SCENE_QUESTIONS)
-        if not questions:
-            return {"answers": {}, "shortlist": [], "backend": "Gemma vision",
-                    "elapsed_s": time.perf_counter() - started}
-    result = local_decide(state, questions, images, args.url, model,
-                          os.environ.get("LOCAL_API_KEY"), args.timeout)
-    result["backend"] = "Gemma vision" if images else "local model"
+    result = (local_decide(state, questions, images, args.url, model,
+                           os.environ.get("LOCAL_API_KEY"), args.timeout,
+                           on_answer=(lambda name, answer: progress("answer", (name, answer)))
+                           if progress else None, parallel=args.parallel)
+              if questions else {"answers": {}})
+    result["backend"] = "Gemma vision"
     if names is not None:
         result["shortlist"] = names
+        result["observation"] = observation
     result["elapsed_s"] = time.perf_counter() - started
     return result
 
 
-def print_result(result, threshold, as_json=False, timestamp=None):
+def print_result(result, threshold, as_json=False, timestamp=None, detail=True):
     shown = render(result, threshold)
     if as_json:
-        data = {**shown, **{key: result[key] for key in ("backend", "shortlist", "elapsed_s")
+        data = {**shown, **{key: result[key] for key in ("backend", "shortlist", "observation", "elapsed_s")
                             if key in result}}
         print(json.dumps({"time": timestamp, **data} if timestamp else data), flush=True)
         return
@@ -93,16 +93,18 @@ def print_result(result, threshold, as_json=False, timestamp=None):
     if elapsed is not None:
         header += f" | {elapsed:.1f}s"
     print(header, flush=True)
-    if "shortlist" in result:
+    if detail and "shortlist" in result:
         print("  Vision shortlist: " + (", ".join(result["shortlist"]) or "none"), flush=True)
-    for name, answer in result["answers"].items():
-        if answer.get("type") == "noul":
-            label = f"JEV: {name}" if result.get("backend") == "JEV API" else f"Jev-style: Is {name} visible?"
-            print(f"  {label} {answer['noul']:.0%} yes", flush=True)
+        observation = result.get("observation", {})
+        print(f"  Scene: {observation.get('summary', '')} | {observation.get('setting', 'unclear')}, "
+              f"{observation.get('lighting', 'unclear')} light", flush=True)
+    for name, answer in (result["answers"].items() if detail else ()):
+        if answer.get("type") == "binary":
+            print(f"  Model score: Is {name} visible? {answer['probability']:.0%} yes", flush=True)
         elif answer.get("type") == "choice":
-            print(f"  Jev-style: {name} = {answer['choice']}", flush=True)
+            print(f"  Model score: {name} = {answer['choice']}", flush=True)
         elif answer.get("type") == "score":
-            print(f"  Jev-style: {name} = {answer['score']:.2f}", flush=True)
+            print(f"  Model score: {name} = {answer['score']:.2f}", flush=True)
     objects = ", ".join(f"{item['name']} {item['probability']:.0%}" for item in shown["objects"])
     scene = ", ".join(f"{name}: {value}" for name, value in shown["scene"].items())
     print(f"  Visible: {objects or 'none above threshold'}"
@@ -118,23 +120,47 @@ def webcam(args, state, questions):
     if not camera.isOpened():
         raise DecisionError(f"Could not open camera {args.camera}")
     camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    print("Camera open. Gemma 3 4B will examine frames; Esc or Ctrl-C to stop.", flush=True)
+    preview = args.preview and not args.no_preview
+    print("Camera open. Gemma 3 4B will examine frames. Ctrl-C to stop."
+          + (" Esc also closes the preview." if preview else ""), flush=True)
     pending = None
+    events = queue.SimpleQueue()
     last_submit = 0.0
+    last_heartbeat = 0.0
+    frame_number = 0
     try:
         while True:
             ok, frame = camera.read()
             if not ok:
                 raise DecisionError("Could not read webcam frame")
-            if not args.no_preview:
-                cv2.imshow("Jev Vision Probe (Esc to quit)", frame)
+            if preview:
+                cv2.imshow("Visual Classifier (Esc to quit)", frame)
                 if cv2.waitKey(1) == 27:
                     break
+            while True:
+                try:
+                    kind, payload = events.get_nowait()
+                except queue.Empty:
+                    break
+                if args.json:
+                    continue
+                if kind == "observation":
+                    print("  Vision shortlist: " + (", ".join(payload["objects"]) or "none"), flush=True)
+                    print(f"  Scene: {payload['summary']} | {payload['setting']}, {payload['lighting']} light", flush=True)
+                elif kind == "answer":
+                    name, answer = payload
+                    if answer.get("type") == "binary":
+                        print(f"  Model score: Is {name} visible? {answer['probability']:.0%} yes", flush=True)
+                    else:
+                        print(f"  Model score: {name} = {answer.get('choice', answer.get('score'))}", flush=True)
             if pending is not None and pending.done():
                 result = pending.result()
                 print_result(result, args.threshold, args.json,
-                             dt.datetime.now().isoformat(timespec="seconds"))
+                             dt.datetime.now().isoformat(timespec="seconds"), detail=False)
                 pending = None
+            if pending is not None and not args.json and time.monotonic() - last_heartbeat >= 10:
+                print("  Gemma is still processing this frame...", flush=True)
+                last_heartbeat = time.monotonic()
             if pending is None and time.monotonic() - last_submit >= args.interval:
                 height, width = frame.shape[:2]
                 if max(height, width) > args.max_edge:
@@ -145,39 +171,47 @@ def webcam(args, state, questions):
                     raise DecisionError("Could not encode camera frame")
                 uri = "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode()
                 pending = concurrent.futures.Future()
+                frame_number += 1
+                if not args.json:
+                    print(f"[{dt.datetime.now().isoformat(timespec='seconds')}] Frame {frame_number}: asking Gemma...", flush=True)
+                last_heartbeat = time.monotonic()
                 def score_frame(future=pending, image=uri):
                     try:
-                        future.set_result(_decide(args, state, questions, [image]))
+                        future.set_result(_decide(args, state, questions, [image],
+                                                  lambda kind, payload: events.put((kind, payload))))
                     except BaseException as exc:
                         future.set_exception(exc)
                 threading.Thread(target=score_frame, daemon=True).start()
                 last_submit = time.monotonic()
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        if preview:
+            cv2.destroyAllWindows()
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="jev-vision", description=__doc__)
-    parser.add_argument("--backend", choices=("local", "jev"), default="local")
+    parser = argparse.ArgumentParser(prog="visual-classifier", description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:8080/v1", help="Local llama.cpp API base")
-    parser.add_argument("--jev-url", default="https://www.jevai.org", help="Jev API origin")
-    parser.add_argument("--model", help="Local server alias (default: local-vision); optional Jev model ID")
+    parser.add_argument("--model", help="Local server alias (default: local-vision)")
     parser.add_argument("--objects", default="all",
                         help="'all' discovers from 36 common objects; comma-separated names score each one")
     parser.add_argument("--list-objects", action="store_true")
-    parser.add_argument("--scene", action="store_true", help="Add indoor/outdoor and brightness questions")
-    parser.add_argument("--config", help="JSON file with state and questions; overrides --objects/--scene")
+    parser.add_argument("--scene", action="store_true", help="Add indoor/outdoor and brightness checks")
+    parser.add_argument("--config", help="JSON file with custom questions; overrides --objects/--scene")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--max-candidates", type=int, default=4,
+                        help="Maximum shortlisted objects to score per frame (default: 4)")
+    parser.add_argument("--parallel", type=int, default=2,
+                        help="Concurrent local object checks (default: 2)")
     parser.add_argument("--timeout", type=float, default=90)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--image", help="Classify a JPEG, PNG, or WebP file")
     source.add_argument("--webcam", action="store_true", help="Continuously classify camera frames")
-    source.add_argument("--state", help="Text/JSON state to decide with Jev or local model")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--interval", type=float, default=1.0, help="Minimum seconds between frame requests (default: 1)")
     parser.add_argument("--max-edge", type=int, default=640, help="Resize webcam longest edge")
-    parser.add_argument("--no-preview", action="store_true")
+    parser.add_argument("--preview", action="store_true", help="Show OpenCV camera window (off by default)")
+    parser.add_argument("--no-preview", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="Print full JSON results")
     return parser
 
@@ -188,24 +222,17 @@ def main(argv=None):
         print("\n".join(OBJECTS))
         return 0
     try:
-        if not 0 <= args.threshold <= 1 or args.max_edge < 64 or args.interval < 0 or args.timeout <= 0:
-            raise DecisionError("Check threshold (0..1), max-edge (>=64), interval (>=0), and timeout (>0)")
+        if not 0 <= args.threshold <= 1 or args.max_edge < 64 or args.interval < 0 or args.timeout <= 0 or not 1 <= args.max_candidates <= 8 or not 1 <= args.parallel <= 4:
+            raise DecisionError("Check threshold (0..1), max-edge (>=64), interval (>=0), timeout (>0), max-candidates (1..8), and parallel (1..4)")
         questions, state = _questions(args)
-        if args.backend == "jev" and (args.image or args.webcam or not (args.state or args.config)):
-            raise DecisionError("Jev's documented API is text-only; choose --backend local for images")
-        if args.webcam or not (args.image or args.state or args.config):
+        if args.webcam or not args.image:
             webcam(args, state, questions)
         else:
-            if args.state:
-                try:
-                    state = json.loads(args.state)
-                except json.JSONDecodeError:
-                    state = args.state
             images = [image_uri(args.image)] if args.image else []
             print_result(_decide(args, state, questions, images), args.threshold, args.json)
         return 0
     except (DecisionError, OSError, json.JSONDecodeError, ValueError) as exc:
-        print(f"jev-vision: {exc}", file=sys.stderr)
+        print(f"visual-classifier: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)

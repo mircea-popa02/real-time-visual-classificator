@@ -19,7 +19,7 @@ def object_questions(objects):
         if name in result:
             raise ValueError(f"Duplicate object: {name}")
         result[name] = {
-            "type": "noul",
+            "type": "binary",
             "instructions": f"Is a {name} visibly present in the image? Answer yes only if visibly supported.",
         }
     if not result:

@@ -1,8 +1,8 @@
-"""Request validation, local logprob scoring, and the native Jev adapter."""
+"""Structured vision observations and local token-probability scoring."""
 
 import json
 import math
-import os
+import concurrent.futures
 import urllib.error
 import urllib.request
 
@@ -26,7 +26,7 @@ def _post(url, body, token=None, timeout=90):
 def options_for(question):
     kind = question.get("type")
     criteria = question.get("criteria")
-    if kind == "noul":
+    if kind == "binary":
         options = {"true": None, "false": None}
     elif kind == "choice" and isinstance(criteria, dict):
         options = criteria
@@ -83,8 +83,8 @@ def probabilities_for(candidates, keys):
 
 def answer_for(question, probabilities):
     kind = question["type"]
-    if kind == "noul":
-        return {"type": "noul", "noul": probabilities["true"]}
+    if kind == "binary":
+        return {"type": "binary", "probability": probabilities["true"]}
     if kind == "choice":
         return {"type": kind, "choice": max(probabilities, key=probabilities.get), "probabilities": probabilities}
     return {"type": kind, "score": sum(int(key) * value for key, value in probabilities.items()),
@@ -92,12 +92,12 @@ def answer_for(question, probabilities):
             "probabilities": probabilities}
 
 
-def local_decide(state, questions, images, base_url, model, api_key=None, timeout=90):
+def local_decide(state, questions, images, base_url, model, api_key=None, timeout=90,
+                 on_answer=None, parallel=2):
     validate_questions(questions)
     if not model:
         raise DecisionError("Set --model to the model alias served by llama.cpp")
-    answers = {}
-    for name, question in questions.items():
+    def ask_one(name, question):
         content = [{"type": "text", "text": prompt_for(state, question)}]
         content += [{"type": "image_url", "image_url": {"url": image}} for image in images]
         body = {"model": model, "messages": [{"role": "user", "content": content}],
@@ -109,12 +109,21 @@ def local_decide(state, questions, images, base_url, model, api_key=None, timeou
         except (KeyError, IndexError, TypeError) as exc:
             raise DecisionError(f"Model returned no token logprobs for question {name!r}") from exc
         probabilities = probabilities_for(candidates, options_for(question))
-        answers[name] = answer_for(question, probabilities)
-    return {"answers": answers}
+        return name, answer_for(question, probabilities)
+
+    completed = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(parallel, len(questions))) as pool:
+        futures = [pool.submit(ask_one, name, question) for name, question in questions.items()]
+        for future in concurrent.futures.as_completed(futures):
+            name, answer = future.result()
+            completed[name] = answer
+            if on_answer:
+                on_answer(name, answer)
+    return {"answers": {name: completed[name] for name in questions}}
 
 
-def local_discover(images, catalog, base_url, model, api_key=None, timeout=90, limit=8):
-    """Ask the vision model for a shortlist from the catalog before scoring it."""
+def local_observe(images, catalog, base_url, model, api_key=None, timeout=90, limit=4):
+    """Get a compact visual observation and shortlist in one model request."""
     if not images:
         raise DecisionError("Object discovery needs an image")
     if not model:
@@ -123,17 +132,22 @@ def local_discover(images, catalog, base_url, model, api_key=None, timeout=90, l
     if not names:
         raise DecisionError("Object catalog is empty")
     content = [{"type": "text", "text":
-                "Identify clearly visible objects in this image. Select up to "
-                f"{limit} distinct names ONLY from this catalog: {', '.join(names)}. "
-                "Return an empty list if none is visible. Do not infer hidden objects."}]
+                "Describe only visible evidence. Select up to "
+                f"{limit} distinct objects ONLY from this catalog: {', '.join(names)}. "
+                "Return an empty list if none is visible. Describe the setting and light, "
+                "and give a short factual scene summary. Do not infer identities or hidden objects."}]
     content += [{"type": "image_url", "image_url": {"url": image}} for image in images]
     body = {
         "model": model, "messages": [{"role": "user", "content": content}],
-        "temperature": 0, "max_completion_tokens": 160,
+        "temperature": 0, "max_completion_tokens": 192,
         "response_format": {"type": "json_schema", "schema": {
-            "type": "object", "properties": {"objects": {"type": "array", "items": {
-                "type": "string", "enum": names}, "maxItems": limit}},
-            "required": ["objects"], "additionalProperties": False}},
+            "type": "object", "properties": {
+                "objects": {"type": "array", "items": {"type": "string", "enum": names}, "maxItems": limit},
+                "setting": {"type": "string", "enum": ["indoors", "outdoors", "unclear"]},
+                "lighting": {"type": "string", "enum": ["dark", "dim", "bright", "unclear"]},
+                "summary": {"type": "string"}},
+            "required": ["objects", "setting", "lighting", "summary"],
+            "additionalProperties": False}},
     }
     response = _post(base_url.rstrip("/") + "/chat/completions", body, api_key, timeout)
     try:
@@ -149,18 +163,9 @@ def local_discover(images, catalog, base_url, model, api_key=None, timeout=90, l
     for item in proposals:
         if isinstance(item, str) and item in allowed and item not in selected:
             selected.append(item)
-    return selected[:limit]
-
-
-def jev_decide(state, questions, model=None, base_url="https://www.jevai.org", timeout=90):
-    validate_questions(questions)
-    key = os.environ.get("JEV_API_KEY")
-    if not key:
-        raise DecisionError("Set JEV_API_KEY in the environment")
-    body = {"state": state, "questions": questions}
-    if model:
-        body["model"] = model
-    response = _post(base_url.rstrip("/") + "/api/v1/decisions", body, key, timeout)
-    if response.get("code") != 0 or not isinstance(response.get("data", {}).get("answers"), dict):
-        raise DecisionError(f"Jev rejected the request: {response.get('message', response)}")
-    return response["data"]
+    return {
+        "objects": selected[:limit],
+        "setting": data.get("setting") if data.get("setting") in {"indoors", "outdoors", "unclear"} else "unclear",
+        "lighting": data.get("lighting") if data.get("lighting") in {"dark", "dim", "bright", "unclear"} else "unclear",
+        "summary": data.get("summary", "")[:240] if isinstance(data.get("summary"), str) else "",
+    }
