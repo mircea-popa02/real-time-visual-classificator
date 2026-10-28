@@ -30,3 +30,6 @@ senses = "senses.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/senses"]
+
+[dependency-groups]
+dev = ["httpx"]

@@ -17,22 +17,20 @@ class Event:
 
 
 class EventBus:
-    """Fan-out of events to asyncio queues; publish() is safe from any thread."""
+    """Fan-out of events to asyncio queues; publish() is safe from any thread.
 
-    def __init__(self, loop=None):
-        self._loop = loop
+    The loop is the one subscribers live on, captured at subscribe(); with no subscribers publish() is a no-op.
+    """
+
+    def __init__(self):
+        self._loop = None
         self._queues = []
         self._lock = threading.Lock()
 
-    def _get_loop(self):
-        if self._loop is None:
-            self._loop = asyncio.get_running_loop()
-        return self._loop
-
     def subscribe(self, maxsize=1000):
-        self._get_loop()
         queue = asyncio.Queue(maxsize=maxsize)
         with self._lock:
+            self._loop = asyncio.get_running_loop()
             self._queues.append(queue)
         return queue
 
@@ -42,7 +40,10 @@ class EventBus:
                 self._queues.remove(queue)
 
     def publish(self, event):
-        loop = self._get_loop() if self._loop is None else self._loop
+        with self._lock:
+            loop, subscribed = self._loop, bool(self._queues)
+        if not subscribed or loop is None or loop.is_closed():
+            return
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:

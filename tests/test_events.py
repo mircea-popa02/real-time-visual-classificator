@@ -32,5 +32,16 @@ class EventBusTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(q.empty())
 
 
+class EventBusWithoutLoopTests(unittest.TestCase):
+    def test_publish_without_subscribers_needs_no_loop(self):
+        bus = EventBus()
+        asyncio.run(asyncio.sleep(0))          # some other loop came and went
+        bus.publish(Event(1.0, "mic", "speech.me", "x"))
+        asyncio.run(self._publish_in_new_loop(bus))
+
+    async def _publish_in_new_loop(self, bus):
+        bus.publish(Event(2.0, "mic", "speech.me", "y"))
+
+
 if __name__ == "__main__":
     unittest.main()
