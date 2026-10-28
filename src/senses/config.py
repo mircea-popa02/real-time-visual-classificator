@@ -76,7 +76,7 @@ class AudioConfig:
 
 @dataclass
 class PresenceConfig:
-    question: str = "Is a person sitting in front of the computer?"
+    question: str = "Is a person sitting close to the camera?"
     enter: float = 0.7
     leave: float = 0.3
     enter_after: float = 2.0

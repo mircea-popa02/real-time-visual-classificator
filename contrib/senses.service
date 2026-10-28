@@ -1,0 +1,14 @@
+# Copy to ~/.config/systemd/user/senses.service, set ExecStart to your checkout, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now senses
+[Unit]
+Description=Senses: local eyes and ears with an MCP interface
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/code/real-time-visual-classificator/start.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -35,7 +35,7 @@ def _errors_as_text(fn):
     return wrapper
 
 
-def _status_text(status):
+def status_text(status):
     lines = [f"presence: {status['presence']}", f"capture: {status['capture']}"]
     if status["paused_until"]:
         lines.append(f"paused until: {_clock(status['paused_until'])}")
@@ -74,7 +74,7 @@ def build_server(daemon):
     @tool
     async def status() -> str:
         """Presence, capture state, sources and their backends, model health, active watches."""
-        return _status_text(daemon.status())
+        return status_text(daemon.status())
 
     @tool
     async def now(sources: list[str] | None = None) -> str:
