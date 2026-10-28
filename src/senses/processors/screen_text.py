@@ -153,6 +153,9 @@ class ScreenTextProcessor:
         self._buckets = {}
         self._busy = {}
 
+    def screens(self):
+        return list(self._lines)
+
     def lines(self, screen):
         return [line.text for line in self._lines.get(screen, [])]
 
