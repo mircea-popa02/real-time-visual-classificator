@@ -1,12 +1,14 @@
 import sys
 from pathlib import Path
+from contextlib import nullcontext
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senses.config import Config, Rule
 from senses.events import Event
-from senses.rules import RulesEngine, resolve_action
+from senses.rules import RulesEngine, mpris_pause, resolve_action
 
 AWAY = Event(0.0, "presence", "presence.away")
 BACK = Event(0.0, "presence", "presence.present")
@@ -75,7 +77,29 @@ class RulesTests(unittest.TestCase):
     def test_fallback_and_missing(self):
         only_xdg = lambda n: "/usr/bin/xdg-screensaver" if n == "xdg-screensaver" else None
         self.assertEqual(resolve_action("@screen.lock", AWAY, which=only_xdg), ["xdg-screensaver", "lock"])
-        self.assertIsNone(resolve_action("@media.pause", AWAY, which=lambda n: None))
+        self.assertIsNone(resolve_action("@screen.lock", AWAY, which=lambda n: None))
+
+    def test_media_pause_falls_back_to_mpris_over_dbus(self):
+        action = resolve_action("@media.pause", AWAY, which=lambda n: None)
+        self.assertTrue(callable(action))
+        paused = []
+        with patch("senses.rules.mpris_pause", lambda: paused.append(True)):
+            engine = RulesEngine([Rule(on="presence.away", run=["@media.pause"])], run=self.ran.append,
+                                 which=lambda n: None)
+            engine.on_event(AWAY, now=0.0)
+            events = engine.tick(0.0)
+        self.assertEqual(paused, [True])
+        self.assertEqual(self.ran, [])
+        self.assertEqual(events[0].text, "mpris pause")
+
+    def test_mpris_pause_targets_every_player(self):
+        sent = []
+        names = ["org.freedesktop.DBus", "org.mpris.MediaPlayer2.firefox.instance1", "org.mpris.MediaPlayer2.spotify"]
+        with patch("senses.rules._mpris_players", lambda conn: [n for n in names if n.startswith("org.mpris.")]), \
+             patch("senses.rules._mpris_send", lambda conn, name: sent.append(name)), \
+             patch("senses.rules._session_bus", lambda: nullcontext(None)):
+            self.assertEqual(mpris_pause(), 2)
+        self.assertEqual(sent, names[1:])
 
 
 if __name__ == "__main__":

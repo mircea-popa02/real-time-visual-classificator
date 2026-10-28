@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 
 from .events import Event
 
@@ -16,6 +17,36 @@ BUILTIN_ACTIONS = {
     "@screen.lock": [["loginctl", "lock-session"], ["xdg-screensaver", "lock"]],
     "@notify": [["notify-send", "Senses", "{text}"]],
 }
+
+
+def _session_bus():
+    from jeepney.io.blocking import open_dbus_connection
+    return open_dbus_connection(bus="SESSION")
+
+
+def _mpris_players(conn):
+    from jeepney.bus_messages import message_bus
+    names = conn.send_and_get_reply(message_bus.ListNames(), timeout=2).body[0]
+    return [name for name in names if name.startswith("org.mpris.MediaPlayer2.")]
+
+
+def _mpris_send(conn, name):
+    from jeepney import DBusAddress, new_method_call
+    player = DBusAddress("/org/mpris/MediaPlayer2", bus_name=name, interface="org.mpris.MediaPlayer2.Player")
+    conn.send_and_get_reply(new_method_call(player, "Pause"), timeout=2)
+
+
+def mpris_pause():
+    """Pause every MPRIS media player on the session bus; returns how many were asked."""
+    with _session_bus() as conn:
+        players = _mpris_players(conn)
+        for name in players:
+            try:
+                _mpris_send(conn, name)
+            except Exception as exc:
+                log.warning("Could not pause %s: %s", name, exc)
+    return len(players)
+
 
 _OPPOSITE = {"presence.away": "presence.present", "presence.present": "presence.away"}
 _warned = set()
@@ -32,6 +63,9 @@ def resolve_action(action, event, which=shutil.which):
         for candidate in BUILTIN_ACTIONS.get(action, []):
             if which(candidate[0]):
                 return _fill(candidate, event)
+        if action == "@media.pause":
+            # No playerctl: talk MPRIS over D-Bus directly.
+            return lambda: mpris_pause()
         if action not in _warned:
             _warned.add(action)
             log.warning("No program available for %s", action)
@@ -89,8 +123,16 @@ class RulesEngine:
         argv = resolve_action(action, pending.event, self._which)
         if argv is None:
             return None
-        self._run(argv)
-        return Event(now, "system", "rule.ran", " ".join(argv), {"on": pending.rule.on, "action": action})
+        if callable(argv):
+            if self._run is run_detached:
+                threading.Thread(target=argv, daemon=True).start()
+            else:
+                argv()
+            text = "mpris pause"
+        else:
+            self._run(argv)
+            text = " ".join(argv)
+        return Event(now, "system", "rule.ran", text, {"on": pending.rule.on, "action": action})
 
     def tick(self, now):
         ran = []
