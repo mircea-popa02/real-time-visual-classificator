@@ -36,4 +36,8 @@ SCENE_QUESTIONS = {
         "type": "score", "instructions": "How bright is the visible scene?",
         "criteria": ["dark", "dim", "bright"],
     },
+    "weather": {
+        "type": "choice", "instructions": "What is the weather in the scene?",
+        "criteria": {"sunny": None, "cloudy": None, "rainy": None, "snowy": None, "unclear": None},
+    }
 }

@@ -6,10 +6,17 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if [[ "${1:-}" == "--help" ]]; then
   cat <<'HELP'
-./start.sh                 Start Gemma 3 4B and classify webcam frames
-./start.sh --image FILE    Classify one image instead
+./start.sh                 Start the vision model and describe webcam frames
+./start.sh --image FILE    Describe one image instead
+./start.sh --server-only   Only run the model server (for other clients)
 ./start.sh --test          Run the built-in offline tests
 Other application options: python3 run.py --help
+
+Environment:
+  VISION_MODEL=gemma4-e4b|gemma3-4b   model (default: gemma4-e4b)
+  VISION_DEVICE=auto|gpu|cpu          default auto: GPU when llama.cpp sees one
+  VISION_PORT=8060                    fixed port (default: first free of 8060-8079)
+  LLAMA_BIN_DIR=DIR                   llama.cpp binaries not on PATH
 HELP
   exit 0
 fi
@@ -23,10 +30,51 @@ if [[ "${1:-}" == "--test" ]]; then
   exec python3 tests/test_decision.py
 fi
 
-if ! command -v llama >/dev/null 2>&1; then
-  echo "Cannot find 'llama'. Install llama.cpp and check that 'llama serve --help' works." >&2
+server_only=0
+if [[ "${1:-}" == "--server-only" ]]; then
+  server_only=1
+  shift
+fi
+if [[ -n "${LLAMA_BIN_DIR:-}" ]]; then
+  PATH="$LLAMA_BIN_DIR:$PATH"
+fi
+
+hf_cache="${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}/hub}"
+case "${VISION_MODEL:-gemma4-e4b}" in
+  gemma3-4b)
+    model_label="Gemma 3 4B"
+    server_cmd=(llama serve --vision-gemma-4b-default) ;;
+  gemma4-e4b)
+    # Reasoning off: the classifier scores the first answer token.
+    model_label="Gemma 4 E4B"
+    server_cmd=(llama-server -hf ggml-org/gemma-4-E4B-it-GGUF:Q4_0 --jinja --reasoning-budget 0)
+    # Skip the online freshness check when the weights are already cached; it also allows running offline.
+    if compgen -G "$hf_cache/models--ggml-org--gemma-4-E4B-it-GGUF/snapshots/*/gemma-4-E4B-it-Q4_0.gguf" >/dev/null; then
+      server_cmd+=(--offline)
+    fi ;;
+  *)
+    echo "VISION_MODEL must be gemma3-4b or gemma4-e4b." >&2
+    exit 1 ;;
+esac
+if ! command -v "${server_cmd[0]}" >/dev/null 2>&1; then
+  echo "Cannot find '${server_cmd[0]}'. Install llama.cpp, or set LLAMA_BIN_DIR to its binaries." >&2
   exit 1
 fi
+device="${VISION_DEVICE:-auto}"
+if [[ "$device" == auto ]]; then
+  device=cpu
+  if command -v llama-server >/dev/null 2>&1 \
+      && llama-server --list-devices 2>/dev/null | grep -qE '^ *(Vulkan|CUDA|ROCm|HIP|Metal|SYCL|MUSA)[0-9]*:'; then
+    device=gpu
+  fi
+fi
+case "$device" in
+  cpu) device_args=(-ngl 0 -c 4096 -np 2) ;;
+  gpu) device_args=(-ngl 99 -fa on -c 16384 -np 4) ;;
+  *)
+    echo "VISION_DEVICE must be auto, cpu or gpu." >&2
+    exit 1 ;;
+esac
 if ! command -v setsid >/dev/null 2>&1; then
   echo "Cannot find 'setsid' (util-linux); it is needed to stop the model server cleanly." >&2
   exit 1
@@ -87,10 +135,10 @@ if ! port_free "$port"; then
 fi
 
 mkdir -p .run
-echo "Starting Gemma 3 4B vision on CPU; first run may download model weights."
+echo "Starting $model_label vision on $device; first run may download model weights."
 echo "Server log: $(pwd)/.run/llama.log"
-setsid llama serve --vision-gemma-4b-default --alias local-vision \
-  -c 2048 -ngl 0 --host 127.0.0.1 --port "$port" > .run/llama.log 2>&1 &
+setsid "${server_cmd[@]}" --alias local-vision \
+  "${device_args[@]}" --host 127.0.0.1 --port "$port" > .run/llama.log 2>&1 &
 server_pid=$!
 
 cleanup() {
@@ -111,7 +159,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 ready=0
-for ((attempt=1; attempt<=900; attempt++)); do
+started=$EPOCHREALTIME
+for ((attempt=1; attempt<=7200; attempt++)); do
   if ! kill -0 "$server_pid" 2>/dev/null; then
     echo "Vision server stopped during startup. Recent log:" >&2
     tail -n 30 .run/llama.log >&2
@@ -126,10 +175,10 @@ PY
     ready=1
     break
   fi
-  if (( attempt % 5 == 0 )); then
-    echo "Waiting for the vision model... ($((attempt * 2)) s)"
+  if (( attempt % 40 == 0 )); then
+    echo "Waiting for the vision model... ($((attempt / 4)) s)"
   fi
-  sleep 2
+  sleep 0.25
 done
 
 if (( ! ready )); then
@@ -137,5 +186,11 @@ if (( ! ready )); then
   exit 1
 fi
 
-echo "Vision model ready. Starting classifier..."
+startup=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.1f}')" "$started" "$EPOCHREALTIME")
+if (( server_only )); then
+  echo "Vision model ready in ${startup}s at http://127.0.0.1:$port/v1 (model alias: local-vision). Ctrl-C to stop."
+  wait "$server_pid"
+  exit $?
+fi
+echo "Vision model ready in ${startup}s. Starting classifier..."
 "$python_bin" run.py --url "http://127.0.0.1:$port/v1" "$@"
