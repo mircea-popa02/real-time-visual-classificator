@@ -3,20 +3,33 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "real-time-visual-classificator"
-version = "0.1.0"
-description = "Local webcam object classification using vision model token probabilities"
+name = "senses"
+version = "0.2.0"
+description = "Local eyes and ears for a desktop: searchable screen, speech and presence history with an MCP interface"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Real-time Visual Classificator contributors"}]
-dependencies = []
+dependencies = [
+    "mcp==2.3.0",
+    "numpy",
+    "opencv-python==5.0.0.93",
+    "rapidocr==3.10.0",
+    "onnxruntime==1.31.1",
+    "soundcard==0.4.6",
+    "pysilero-vad==3.4.0",
+    "mss==10.2.0",
+    "jeepney",
+]
 
 [project.optional-dependencies]
-webcam = ["opencv-python==5.0.0.93"]
+tray = ["pystray", "pillow"]
 
 [project.scripts]
-visual-classifier = "visual_classifier.cli:main"
+senses = "senses.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/visual_classifier"]
+packages = ["src/senses"]
+
+[dependency-groups]
+dev = ["httpx"]

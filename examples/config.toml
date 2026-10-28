@@ -1,0 +1,56 @@
+# ~/.config/senses/config.toml — every key is optional; these are the defaults.
+
+[model]
+# url = "http://127.0.0.1:8080/v1"   # use an already-running OpenAI-compatible server instead of starting one
+server_bin = "llama-server"
+hf = "ggml-org/gemma-4-E4B-it-GGUF:Q4_0"
+device = "auto"                       # auto, gpu or cpu
+alias = "senses"
+timeout = "30s"
+slots = 4
+
+[screen]
+backend = "auto"                      # auto, portal, mss or command
+# command = "spectacle -b -n -f -o {path}"
+interval = "2s"
+min_change = 0.002                    # fraction of pixels that must change before OCR runs
+ocr_per_minute = 30
+
+[camera]
+enabled = true
+# device = 0
+
+[audio]
+enabled = true
+# mic = "HD Webcam C615 Mono"         # default: the system default microphone
+# desktop = "K3 Analog Stereo"        # default: loopback of the system default output
+max_utterance = "30s"
+languages = ["Romanian", "English"]   # transcription prompt; other scripts are dropped
+
+[presence]
+question = "Is a person sitting close to the camera?"
+enter = 0.7
+leave = 0.3
+enter_after = "2s"
+leave_after = "5s"
+
+[summary]
+min_interval = "30s"
+scene_interval = "60s"
+
+[store]
+# path = "~/.local/share/senses/senses.db"
+retention_days = 30
+
+[server]
+host = "127.0.0.1"
+port = 8765
+
+[privacy]
+exclude = []                          # app or window-title fragments to skip, e.g. ["KeePassXC"]
+
+# Replaces the default rule list. The default: leave the desk → after 10 s pause media and lock the screen.
+[[rules]]
+on = "presence.away"
+after = "10s"
+run = ["@media.pause", "@screen.lock"]

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# From an extracted folder: ./start.sh [optional run.py flags]
+# ./start.sh [senses run options]   — prepare .venv, then run the senses daemon in the foreground.
 set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if [[ "${1:-}" == "--help" ]]; then
   cat <<'HELP'
-./start.sh                 Start Gemma 3 4B and classify webcam frames
-./start.sh --image FILE    Classify one image instead
-./start.sh --test          Run the built-in offline tests
-Other application options: python3 run.py --help
+./start.sh                 Start senses: model server, capture, MCP on http://127.0.0.1:8765/mcp
+./start.sh --view          Browse the history database in a web UI (Datasette, read-only)
+./start.sh --test          Run the offline tests
+Other commands (while it runs): .venv/bin/python run.py status | pause [10m] [--all] | resume | search QUERY | tail
+Settings: ~/.config/senses/config.toml (see examples/config.toml)
+Environment: LLAMA_BIN_DIR=DIR if llama.cpp's binaries are not on PATH
 HELP
   exit 0
 fi
@@ -19,123 +21,33 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ "${1:-}" == "--test" ]]; then
-  exec python3 tests/test_decision.py
-fi
-
-if ! command -v llama >/dev/null 2>&1; then
-  echo "Cannot find 'llama'. Install llama.cpp and check that 'llama serve --help' works." >&2
-  exit 1
-fi
-if ! command -v setsid >/dev/null 2>&1; then
-  echo "Cannot find 'setsid' (util-linux); it is needed to stop the model server cleanly." >&2
-  exit 1
+if [[ -n "${LLAMA_BIN_DIR:-}" ]]; then
+  PATH="$LLAMA_BIN_DIR:$PATH"
 fi
 
 if command -v uv >/dev/null 2>&1; then
-  echo "Preparing webcam dependency with uv..."
-  uv sync --extra webcam
+  uv sync -q
 else
-  echo "Preparing Python virtual environment..."
   if [[ ! -x .venv/bin/python ]]; then
     python3 -m venv .venv || {
       echo "Could not create .venv. Install your distribution's python3-venv package." >&2
       exit 1
     }
   fi
-  .venv/bin/python -m pip install 'opencv-python==5.0.0.93'
+  .venv/bin/python -m pip install -q -e . httpx
 fi
 
-python_bin="$(pwd)/.venv/bin/python"
-"$python_bin" -c 'import cv2' || {
-  echo "OpenCV could not load. Check the installation above." >&2
-  exit 1
-}
-
-port="${VISION_PORT:-8060}"
-if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
-  echo "VISION_PORT must be a port from 1024 to 65535." >&2
-  exit 1
-fi
-port_free() {
-  python3 - "$1" <<'PY'
-import socket, sys
-with socket.socket() as sock:
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        sock.bind(("127.0.0.1", int(sys.argv[1])))
-    except OSError:
-        raise SystemExit(1)
-PY
-}
-if ! port_free "$port"; then
-  if [[ -n "${VISION_PORT:-}" ]]; then
-    echo "Port $port is already in use. Choose a free VISION_PORT or stop the process using it." >&2
-    exit 1
-  fi
-  for candidate in {8061..8079}; do
-    if port_free "$candidate"; then
-      echo "Port 8060 is in use; using port $candidate. An older server may still be running on 8060."
-      port="$candidate"
-      break
-    fi
-  done
-  if [[ "$port" == 8060 ]]; then
-    echo "No free port found from 8060 to 8079. Stop the old server or set VISION_PORT." >&2
-    exit 1
-  fi
+if [[ "${1:-}" == "--test" ]]; then
+  exec .venv/bin/python -m unittest discover -s tests
 fi
 
-mkdir -p .run
-echo "Starting Gemma 3 4B vision on CPU; first run may download model weights."
-echo "Server log: $(pwd)/.run/llama.log"
-setsid llama serve --vision-gemma-4b-default --alias local-vision \
-  -c 2048 -ngl 0 --host 127.0.0.1 --port "$port" > .run/llama.log 2>&1 &
-server_pid=$!
+if [[ "${1:-}" == "--view" ]]; then
+  exec .venv/bin/python run.py view "${@:2}"
+fi
 
-cleanup() {
-  trap - EXIT INT TERM
-  # The separate session includes wrapper scripts and any children they launch.
-  kill -TERM -- "-$server_pid" 2>/dev/null || true
-  for ((attempt=0; attempt<20; attempt++)); do
-    if ! kill -0 -- "-$server_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.1
-  done
-  kill -KILL -- "-$server_pid" 2>/dev/null || true
-  wait "$server_pid" 2>/dev/null || true
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-ready=0
-for ((attempt=1; attempt<=900; attempt++)); do
-  if ! kill -0 "$server_pid" 2>/dev/null; then
-    echo "Vision server stopped during startup. Recent log:" >&2
-    tail -n 30 .run/llama.log >&2
-    exit 1
-  fi
-  if "$python_bin" - "$port" <<'PY' >/dev/null 2>&1
-import sys, urllib.request
-with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/health", timeout=1) as response:
-    assert response.status == 200
-PY
-  then
-    ready=1
-    break
-  fi
-  if (( attempt % 5 == 0 )); then
-    echo "Waiting for the vision model... ($((attempt * 2)) s)"
-  fi
-  sleep 2
-done
-
-if (( ! ready )); then
-  echo "Vision server did not become ready. See .run/llama.log" >&2
+if ! command -v llama-server >/dev/null 2>&1; then
+  echo "Cannot find 'llama-server'. Install llama.cpp, or set LLAMA_BIN_DIR to its binaries." >&2
   exit 1
 fi
 
-echo "Vision model ready. Starting classifier..."
-"$python_bin" run.py --url "http://127.0.0.1:$port/v1" "$@"
+exec .venv/bin/python run.py run "$@"
