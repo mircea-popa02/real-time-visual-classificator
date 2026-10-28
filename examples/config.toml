@@ -25,6 +25,7 @@ enabled = true
 # mic = "HD Webcam C615 Mono"         # default: the system default microphone
 # desktop = "K3 Analog Stereo"        # default: loopback of the system default output
 max_utterance = "30s"
+languages = ["Romanian", "English"]   # transcription prompt; other scripts are dropped
 
 [presence]
 question = "Is a person sitting close to the camera?"

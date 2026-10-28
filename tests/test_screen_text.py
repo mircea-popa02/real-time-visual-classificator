@@ -6,7 +6,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from senses.processors.screen_text import OcrLine, ScreenTextProcessor, changed_boxes, changed_region, new_lines
+from senses.processors.screen_text import (OcrLine, ScreenTextProcessor, changed_boxes, changed_region,
+                                           clean_text, new_lines, useful_text)
 from senses.sources.screen import Frame
 
 
@@ -69,6 +70,17 @@ class ChangedBoxesTests(unittest.TestCase):
         img = np.zeros((100, 100, 3), np.uint8)
         self.assertEqual(changed_boxes(img, img.copy()), [])
         self.assertEqual(changed_boxes(None, img), [(0, 0, 100, 100)])
+
+
+class CleanTextTests(unittest.TestCase):
+    def test_whitespace_is_collapsed(self):
+        self.assertEqual(clean_text("  New\t Tab \n"), "New Tab")
+
+    def test_debris_is_not_useful(self):
+        for text in ("", " ", "7", "79", "8060", "+", "\u76ee"):
+            self.assertFalse(useful_text(text), text)
+        for text in ("New Tab", "build ok", "19:10 a", "ăă"):
+            self.assertTrue(useful_text(text), text)
 
 
 class NewLinesTests(unittest.TestCase):

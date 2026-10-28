@@ -75,8 +75,8 @@ class ModelClient:
     def describe(self, images, prompt, priority, **kwargs):
         return self.submit(priority, decision.describe, images, prompt, **kwargs)
 
-    def transcribe(self, wav, priority):
-        return self.submit(priority, decision.transcribe, wav)
+    def transcribe(self, wav, priority, languages=None):
+        return self.submit(priority, decision.transcribe, wav, languages=languages)
 
     def healthy(self):
         root = self.base_url.rstrip("/").removesuffix("/v1")

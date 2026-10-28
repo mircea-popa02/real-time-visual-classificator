@@ -48,22 +48,20 @@ If your camera is not device 0, add `--camera 1`. The launcher uses port 8060 an
 
 ## Browsing the history
 
-While the daemon runs, open **http://127.0.0.1:8765/** for a read-only timeline and full-text search
-(time range and source filters, live refresh). The same data is available over MCP and from the terminal
-(`.venv/bin/python run.py search QUERY`, `tail`, `status`).
-
 History lives in SQLite at `~/.local/share/senses/senses.db` (or `$XDG_DATA_HOME/senses/senses.db`;
 override with `[store] path` in `~/.config/senses/config.toml`). It stores text only — OCR text, transcripts
-and presence events — in one `events` table with an FTS5 index. Inspect it with:
+and presence events — in one `events` table with an FTS5 index. Browse it with
+[Datasette](https://datasette.io/) (read-only, any schema):
 
 ```sh
-.venv/bin/python - <<'PY'
-import sqlite3, datetime
-db = sqlite3.connect("file:" + __import__("os").path.expanduser("~/.local/share/senses/senses.db") + "?mode=ro", uri=True)
-for ts, source, kind, text in db.execute("select ts, source, kind, text from events order by ts desc limit 20"):
-    print(datetime.datetime.fromtimestamp(ts), source, kind, "|", text)
-PY
+./start.sh --view
+# SQLite viewer: http://127.0.0.1:8001/  (Ctrl-C to stop)
 ```
+
+`--view` runs `uvx datasette <db>` when `uv` is installed, otherwise `datasette` from `PATH`
+(`pipx install datasette`). The daemon does not need to be running. For a desktop GUI, open the same file
+with DB Browser for SQLite. The data is also available over MCP and from the terminal
+(`.venv/bin/python run.py search QUERY`, `tail`, `status`).
 
 ## How it works
 

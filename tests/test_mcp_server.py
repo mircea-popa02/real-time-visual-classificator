@@ -111,24 +111,7 @@ class ControlRouteTests(unittest.TestCase):
         self.assertEqual(self.http.get("/control/timeline", params={"since": "1m"}).json()[0]["source"], "mic")
         self.assertEqual(self.http.get("/control/timeline", params={"since": "soon"}).status_code, 400)
 
-    def test_history_page_is_served(self):
-        page = self.http.get("/")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("senses history", page.text)
-        self.assertIn("/control/timeline", page.text)
 
-    def test_timeline_source_filter_and_limit(self):
-        self.daemon.store.add(Event(time.time() - 4, "screen:desktop", "screen.text", "editor open"))
-        self.daemon.store.add(Event(time.time() - 3, "screen:desktop", "screen.text", "terminal open"))
-        rows = self.http.get("/control/timeline", params={"since": "1m", "sources": "screen", "limit": 1}).json()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["source"], "screen:desktop")
-        self.assertEqual(rows[0]["kind"], "screen.text")
-
-    def test_search_respects_sources(self):
-        self.daemon.store.add(Event(time.time() - 4, "screen:desktop", "screen.text", "salut screen"))
-        rows = self.http.get("/control/search", params={"q": "salut", "sources": "mic"}).json()
-        self.assertEqual([row["text"] for row in rows], ["salut lume"])
 
 
 if __name__ == "__main__":

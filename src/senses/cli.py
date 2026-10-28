@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
+import shutil
 import sys
 import time
 import urllib.error
@@ -28,6 +30,33 @@ def _control(method, path, body=None, port=8765):
 
 def _events(rows):
     return [Event(row["ts"], row["source"], row["kind"], row["text"]) for row in rows]
+
+
+def _datasette_argv(path, host, port):
+    for launcher in ("uvx", "datasette"):
+        binary = shutil.which(launcher)
+        if binary:
+            prefix = [binary, "datasette"] if launcher == "uvx" else [binary]
+            return [*prefix, str(path), "--host", host, "--port", str(port)]
+    return None
+
+
+def _view(path, host, port):
+    if not path.exists():
+        print(f"senses: {path} does not exist yet; start the daemon once to create it", file=sys.stderr)
+        return 1
+    argv = _datasette_argv(path, host, port)
+    if argv is None:
+        print("senses: Datasette is not installed; install uv (for 'uvx datasette') or run: pipx install datasette",
+              file=sys.stderr)
+        return 2
+    print(f"SQLite viewer: http://{host}:{port}/  (Ctrl-C to stop)", file=sys.stderr, flush=True)
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        print(f"senses: cannot start Datasette: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _capture_line(status):
@@ -81,7 +110,7 @@ async def _run(cfg):
             print(f"  {name:<8} {source['backend'] or 'off'}")
         print("\n".join(notes) if notes else "", end="\n" if notes else "")
         print(f"MCP: {mcp_url}\n  add it to Claude Code: claude mcp add --transport http senses {mcp_url}")
-        print(f"UI:  http://{cfg.server.host}:{cfg.server.port}/", flush=True)
+        print("History viewer: ./start.sh --view  (http://127.0.0.1:8001/)", flush=True)
         tasks = [asyncio.create_task(daemon.run()), asyncio.create_task(serve(daemon, cfg.server.host, cfg.server.port))]
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -112,6 +141,9 @@ def build_parser():
     search.add_argument("--limit", type=int, default=20)
     tail = commands.add_parser("tail", help="Print new events as they happen")
     tail.add_argument("--since", default="1m")
+    view = commands.add_parser("view", help="Serve a read-only web UI for the history database (Datasette)")
+    view.add_argument("--host", default="127.0.0.1")
+    view.add_argument("--port", type=int, default=8001)
     return parser
 
 
@@ -122,6 +154,8 @@ def main(argv=None):
     except ConfigError as exc:
         print(f"senses: {exc}", file=sys.stderr)
         return 2
+    if args.command == "view":
+        return _view(cfg.store.resolved_path(), args.host, args.port)
     port = cfg.server.port
     if args.command == "run":
         logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s: %(message)s")

@@ -78,6 +78,14 @@ class TranscribeTests(unittest.TestCase):
         self.assertFalse(body["chat_template_kwargs"]["enable_thinking"])
 
     @patch("senses.decision._post")
+    def test_transcribe_restricts_languages(self, post):
+        post.return_value = {"choices": [{"message": {"content": "buna"}}]}
+        transcribe(b"RIFF", "http://x/v1", "m", languages=["Romanian", "English"])
+        prompt = post.call_args.args[1]["messages"][0]["content"][1]["text"]
+        self.assertIn("Romanian", prompt)
+        self.assertIn("English", prompt)
+
+    @patch("senses.decision._post")
     def test_transcribe_malformed_response(self, post):
         post.return_value = {"choices": []}
         with self.assertRaises(DecisionError):

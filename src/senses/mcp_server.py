@@ -6,12 +6,11 @@ import time
 
 from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import JSONResponse
 
 from .config import ConfigError, parse_duration
 from .decision import DecisionError
 from .timefmt import format_events, parse_since
-from .ui import PAGE
 from .watches import parse_condition
 
 INSTRUCTIONS = ("Senses keeps a local text history of the owner's screens, speech and presence. "
@@ -66,24 +65,6 @@ def _answers_text(result):
 
 def _event_json(event):
     return {"ts": event.ts, "source": event.source, "kind": event.kind, "text": event.text}
-
-
-def _sources(request):
-    raw = request.query_params.get("sources", "")
-    return [name.strip() for name in raw.split(",") if name.strip()] or None
-
-
-def _limit(request, default, maximum):
-    try:
-        return min(maximum, max(1, int(request.query_params.get("limit", default))))
-    except ValueError:
-        return default
-
-
-def _window(request, now):
-    since = parse_since(request.query_params["since"], now) if request.query_params.get("since") else None
-    until = parse_since(request.query_params["until"], now) if request.query_params.get("until") else None
-    return since, until
 
 
 def build_server(daemon):
@@ -195,31 +176,23 @@ def build_server(daemon):
         daemon.resume()
         return JSONResponse(daemon.status())
 
-    @server.custom_route("/", methods=["GET"])
-    async def history_page(request: Request):
-        return HTMLResponse(PAGE)
-
     @server.custom_route("/control/search", methods=["GET"])
     async def control_search(request: Request):
         params = request.query_params
         try:
-            since, until = _window(request, time.time())
+            since = parse_since(params["since"], time.time()) if params.get("since") else None
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        events = daemon.store.search(params.get("q", ""), since=since, until=until,
-                                     sources=_sources(request), limit=_limit(request, 20, 500))
+        events = daemon.store.search(params.get("q", ""), since=since, limit=int(params.get("limit", 20)))
         return JSONResponse([_event_json(e) for e in events])
 
     @server.custom_route("/control/timeline", methods=["GET"])
     async def control_timeline(request: Request):
-        now = time.time()
         try:
-            since, until = _window(request, now)
+            since = parse_since(request.query_params.get("since", "1m"), time.time())
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        events = daemon.store.timeline(now - 60 if since is None else since, until=until,
-                                       sources=_sources(request), limit=_limit(request, 500, 2000))
-        return JSONResponse([_event_json(e) for e in events])
+        return JSONResponse([_event_json(e) for e in daemon.store.timeline(since)])
 
     return server
 

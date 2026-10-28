@@ -2,6 +2,7 @@
 
 import io
 import logging
+import unicodedata
 import wave
 
 import numpy as np
@@ -82,15 +83,23 @@ class Segmenter:
         return []
 
 
+def mostly_latin(text):
+    """Whether more than half of the letters are Latin script; drops hallucinated foreign-script output."""
+    letters = [char for char in text if char.isalpha()]
+    latin = sum(unicodedata.name(char, "").startswith("LATIN") for char in letters)
+    return not letters or latin * 2 > len(letters)
+
+
 class SpeechProcessor:
-    def __init__(self, client, publish, source):
+    def __init__(self, client, publish, source, languages=None):
         self.client = client
         self.publish = publish
         self.source = source
+        self.languages = languages
         self.kind = "speech.me" if source == "mic" else "speech.desktop"
 
     def handle(self, utterance, ts):
-        future = self.client.transcribe(to_wav(utterance), SPEECH)
+        future = self.client.transcribe(to_wav(utterance), SPEECH, self.languages)
         future.add_done_callback(lambda done: self._done(done, ts))
 
     def _done(self, future, ts):
@@ -99,5 +108,7 @@ class SpeechProcessor:
         except Exception as exc:
             log.warning("Transcription failed for %s: %s", self.source, exc)
             return
-        if text:
+        if text and mostly_latin(text):
             self.publish(Event(ts, self.source, self.kind, text))
+        elif text:
+            log.info("Dropped non-Latin transcript from %s: %s", self.source, text)

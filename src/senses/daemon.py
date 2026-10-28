@@ -250,7 +250,7 @@ class Daemon:
     def _audio_worker(self, stream):
         try:
             segmenter = Segmenter(silero_vad(), max_length=self.config.audio.max_utterance)
-            speech = SpeechProcessor(self.client, self.emit, stream.name)
+            speech = SpeechProcessor(self.client, self.emit, stream.name, self.config.audio.languages)
             for block in stream.blocks():
                 if self._stopping:
                     return

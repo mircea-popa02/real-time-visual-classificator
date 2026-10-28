@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from senses.config import AudioConfig
-from senses.processors.speech import Segmenter, SpeechProcessor, to_wav
+from senses.processors.speech import Segmenter, SpeechProcessor, mostly_latin, to_wav
 from senses.sources.audio import BLOCK, find_devices
 
 
@@ -59,15 +59,15 @@ class WavTests(unittest.TestCase):
 class SpeechProcessorTests(unittest.TestCase):
     def test_publishes_tagged_transcript(self):
         published = []
-        client = SimpleNamespace(transcribe=lambda wav, priority: done_future("salut"))
+        client = SimpleNamespace(transcribe=lambda wav, priority, languages=None: done_future("salut"))
         SpeechProcessor(client, published.append, "mic").handle(np.zeros(8000, np.float32), 5.0)
         self.assertEqual((published[0].source, published[0].kind, published[0].text), ("mic", "speech.me", "salut"))
 
     def test_desktop_tag_and_empty_dropped(self):
         published = []
-        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority: done_future("hi")), published.append,
+        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority, languages=None: done_future("hi")), published.append,
                         "desktop").handle(np.zeros(8000, np.float32), 1.0)
-        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority: done_future("  ")), published.append,
+        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority, languages=None: done_future("  ")), published.append,
                         "mic").handle(np.zeros(8000, np.float32), 2.0)
         self.assertEqual([e.kind for e in published], ["speech.desktop"])
 
@@ -75,9 +75,30 @@ class SpeechProcessorTests(unittest.TestCase):
         failed = concurrent.futures.Future()
         failed.set_exception(RuntimeError("model down"))
         published = []
-        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority: failed), published.append,
+        SpeechProcessor(SimpleNamespace(transcribe=lambda wav, priority, languages=None: failed), published.append,
                         "mic").handle(np.zeros(8000, np.float32), 1.0)
         self.assertEqual(published, [])
+
+    def test_languages_are_forwarded(self):
+        seen = []
+        client = SimpleNamespace(
+            transcribe=lambda wav, priority, languages=None: seen.append(languages) or done_future("buna"))
+        SpeechProcessor(client, lambda event: None, "mic", ["Romanian", "English"]).handle(
+            np.zeros(8000, np.float32), 1.0)
+        self.assertEqual(seen, [["Romanian", "English"]])
+
+    def test_non_latin_hallucination_is_dropped(self):
+        published = []
+        SpeechProcessor(SimpleNamespace(
+            transcribe=lambda wav, priority, languages=None: done_future("Я поставил принтер Epson")),
+            published.append, "mic").handle(np.zeros(8000, np.float32), 1.0)
+        self.assertEqual(published, [])
+
+    def test_mostly_latin_keeps_diacritics(self):
+        self.assertTrue(mostly_latin("Mă întreb dacă merge transcrierea."))
+        self.assertTrue(mostly_latin("hello world"))
+        self.assertFalse(mostly_latin("Я поставил принтер"))
+        self.assertTrue(mostly_latin("123"))
 
 
 class FindDevicesTests(unittest.TestCase):

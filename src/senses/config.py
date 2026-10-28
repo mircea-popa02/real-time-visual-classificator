@@ -72,6 +72,7 @@ class AudioConfig:
     mic: str | None = None
     desktop: str | None = None
     max_utterance: float = 30.0
+    languages: list[str] = field(default_factory=lambda: ["Romanian", "English"])
 
 
 @dataclass

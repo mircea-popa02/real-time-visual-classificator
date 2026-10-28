@@ -216,11 +216,14 @@ def describe(images, prompt, base_url, model, grammar=None, max_tokens=64, api_k
     return _content(_post(base_url.rstrip("/") + "/chat/completions", body, api_key, timeout))
 
 
-def transcribe(audio_wav, base_url, model, api_key=None, timeout=30):
-    """Verbatim transcript of a WAV clip, in whatever language is spoken."""
+def transcribe(audio_wav, base_url, model, api_key=None, timeout=30, languages=None):
+    """Verbatim transcript of a WAV clip, restricted to `languages` (the spoken language by default)."""
+    names = list(languages or ["the spoken language"])
+    allowed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+    prompt = (f"Transcribe this audio verbatim in {allowed}. Output only the transcript. "
+              "If there is no intelligible speech, output nothing.")
     content = [{"type": "input_audio", "input_audio": {"data": base64.b64encode(audio_wav).decode(), "format": "wav"}},
-               {"type": "text", "text": "Transcribe this audio verbatim in its original language. "
-                                        "Output only the transcript."}]
+               {"type": "text", "text": prompt}]
     body = {"model": model, "messages": [{"role": "user", "content": content}],
             "temperature": 0, "max_completion_tokens": 512, **NO_THINKING}
     return _content(_post(base_url.rstrip("/") + "/chat/completions", body, api_key, timeout))

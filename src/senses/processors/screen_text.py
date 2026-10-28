@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import dataclass
 import difflib
+import re
 import time
 
 import cv2
@@ -13,6 +14,18 @@ from ..events import Event
 _SCALE = 4
 _BAND_PAD = 16
 _LINE_MARGIN = 400
+_SPACE = re.compile(r"\s+")
+_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def clean_text(text):
+    """Collapse whitespace so the same OCR line is stored and compared consistently."""
+    return _SPACE.sub(" ", text).strip()
+
+
+def useful_text(text):
+    """Drop OCR debris: empty or one-character lines, line numbers, punctuation and icons."""
+    return len(text) >= 2 and _LETTER.search(text) is not None
 
 
 def changed_region(prev, cur, min_change=0.002, threshold=24):
@@ -100,7 +113,12 @@ class RapidOcrEngine:
         result = self._engine(image)
         texts = list(result.txts or [])
         boxes = list(result.boxes) if result.boxes is not None else []
-        return [OcrLine(text, int(box[0][0]), int(box[0][1])) for text, box in zip(texts, boxes) if text.strip()]
+        lines = []
+        for text, box in zip(texts, boxes):
+            text = clean_text(text)
+            if useful_text(text):
+                lines.append(OcrLine(text, int(box[0][0]), int(box[0][1])))
+        return lines
 
 
 def new_lines(previous, current, similarity=1.0):
@@ -183,6 +201,7 @@ class ScreenTextProcessor:
             lines = [line for line in lines if not inside(line)] + read
         self._lines[screen] = sorted(lines, key=lambda line: (line.y, line.x))
         busy = self._busy.pop(screen, False)
+        fresh = list(dict.fromkeys(fresh))
         if not fresh:
             return None
         return Event(frame.ts, f"screen:{screen}", "screen.text", "\n".join(fresh), {"screen": screen, "busy": busy})

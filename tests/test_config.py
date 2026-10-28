@@ -24,6 +24,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.rules[0].after, 10.0)
         self.assertEqual(cfg.rules[0].run, ["@media.pause", "@screen.lock"])
         self.assertEqual(cfg.server.host, "127.0.0.1")
+        self.assertEqual(cfg.audio.languages, ["Romanian", "English"])
 
     def test_toml_overrides_and_durations(self):
         tmp = write_tmp('[screen]\ninterval = "500ms"\n[[rules]]\non = "presence.present"\nrun = ["@notify"]\n')
