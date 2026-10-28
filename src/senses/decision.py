@@ -1,5 +1,6 @@
-"""Structured vision observations and local token-probability scoring."""
+"""Model-facing core: scored questions, grammar-constrained observations, descriptions and transcription."""
 
+import base64
 import json
 import math
 import concurrent.futures
@@ -195,3 +196,31 @@ def local_observe(images, base_url, model, catalog=None, api_key=None, timeout=9
         "lighting": parts[2] if parts[2] in LIGHTING else "unclear",
         "summary": " | ".join(parts[3:])[:240] if describe else "",
     }
+
+
+def _content(response):
+    try:
+        return response["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise DecisionError("Model returned no message content") from exc
+
+
+def describe(images, prompt, base_url, model, grammar=None, max_tokens=64, api_key=None, timeout=30):
+    """Free-text (or grammar-constrained) answer about one or more images."""
+    content = [{"type": "image_url", "image_url": {"url": image}} for image in images]
+    content += [{"type": "text", "text": prompt}]
+    body = {"model": model, "messages": [{"role": "user", "content": content}],
+            "temperature": 0, "max_completion_tokens": max_tokens, **NO_THINKING}
+    if grammar:
+        body["grammar"] = grammar
+    return _content(_post(base_url.rstrip("/") + "/chat/completions", body, api_key, timeout))
+
+
+def transcribe(audio_wav, base_url, model, api_key=None, timeout=30):
+    """Verbatim transcript of a WAV clip, in whatever language is spoken."""
+    content = [{"type": "input_audio", "input_audio": {"data": base64.b64encode(audio_wav).decode(), "format": "wav"}},
+               {"type": "text", "text": "Transcribe this audio verbatim in its original language. "
+                                        "Output only the transcript."}]
+    body = {"model": model, "messages": [{"role": "user", "content": content}],
+            "temperature": 0, "max_completion_tokens": 512, **NO_THINKING}
+    return _content(_post(base_url.rstrip("/") + "/chat/completions", body, api_key, timeout))
