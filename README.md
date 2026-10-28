@@ -46,6 +46,25 @@ By default each frame is one short request: the model names up to six visible ob
 
 If your camera is not device 0, add `--camera 1`. The launcher uses port 8060 and automatically tries 8061–8079 if it is busy. You can also set `VISION_PORT=8061 ./start.sh`; an explicitly selected busy port produces an error. If an older version left a server on 8060, check the listener with `ss -ltnp '( sport = :8060 )'` and stop **that PID** with `kill PID` if it belongs to your previous run. On a machine with little RAM or VRAM, stop an old model server before starting a second copy. Startup messages are in the terminal; detailed server messages go to `.run/llama.log`. If setup fails, read the terminal error and that log. On Wayland, `QT_QPA_PLATFORM=xcb ./start.sh --preview` may work if Xwayland is installed; the default terminal-only mode does not use Qt.
 
+## Browsing the history
+
+While the daemon runs, open **http://127.0.0.1:8765/** for a read-only timeline and full-text search
+(time range and source filters, live refresh). The same data is available over MCP and from the terminal
+(`.venv/bin/python run.py search QUERY`, `tail`, `status`).
+
+History lives in SQLite at `~/.local/share/senses/senses.db` (or `$XDG_DATA_HOME/senses/senses.db`;
+override with `[store] path` in `~/.config/senses/config.toml`). It stores text only — OCR text, transcripts
+and presence events — in one `events` table with an FTS5 index. Inspect it with:
+
+```sh
+.venv/bin/python - <<'PY'
+import sqlite3, datetime
+db = sqlite3.connect("file:" + __import__("os").path.expanduser("~/.local/share/senses/senses.db") + "?mode=ro", uri=True)
+for ts, source, kind, text in db.execute("select ts, source, kind, text from events order by ts desc limit 20"):
+    print(datetime.datetime.fromtimestamp(ts), source, kind, "|", text)
+PY
+```
+
 ## How it works
 
 Only the local vision model is used. Each frame goes to llama.cpp's OpenAI-compatible endpoint with a GBNF grammar that forces one terse line, `objects | setting | light [| sentence]`. A short line instead of JSON keeps generation to ~15 tokens, which dominates latency. Reasoning is disabled so the model answers directly. With `--verify`, the app also asks short binary questions per object and reads the first output token's log probabilities for the `A` and `B` options. No hosted API or key is involved.

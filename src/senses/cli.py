@@ -80,7 +80,8 @@ async def _run(cfg):
         for name, source in daemon.status()["sources"].items():
             print(f"  {name:<8} {source['backend'] or 'off'}")
         print("\n".join(notes) if notes else "", end="\n" if notes else "")
-        print(f"MCP: {mcp_url}\n  add it to Claude Code: claude mcp add --transport http senses {mcp_url}", flush=True)
+        print(f"MCP: {mcp_url}\n  add it to Claude Code: claude mcp add --transport http senses {mcp_url}")
+        print(f"UI:  http://{cfg.server.host}:{cfg.server.port}/", flush=True)
         tasks = [asyncio.create_task(daemon.run()), asyncio.create_task(serve(daemon, cfg.server.host, cfg.server.port))]
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

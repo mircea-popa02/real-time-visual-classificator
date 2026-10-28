@@ -7,6 +7,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 if [[ "${1:-}" == "--help" ]]; then
   cat <<'HELP'
 ./start.sh                 Start senses: model server, capture, MCP on http://127.0.0.1:8765/mcp
+./start.sh                 History UI: http://127.0.0.1:8765/
 ./start.sh --test          Run the offline tests
 Other commands (while it runs): .venv/bin/python run.py status | pause [10m] [--all] | resume | search QUERY | tail
 Settings: ~/.config/senses/config.toml (see examples/config.toml)
